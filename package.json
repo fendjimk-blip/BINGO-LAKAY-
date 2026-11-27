@@ -1,0 +1,285 @@
+/*
+ * BINGO LAKAY - Moteur de règles (partagé navigateur + serveur)
+ * Aucune dépendance. Les états sont des objets simples (sérialisables en JSON).
+ * Les fonctions MODIFIENT l'état en place et renvoient { ok, ... } ou { ok:false, error }.
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.BingoEngine = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  var LETTERS = ['B', 'I', 'N', 'G', 'O'];
+  var RANGES = [[1, 15], [16, 30], [31, 45], [46, 60], [61, 75]];
+  var FREE = 0;                              // case centrale gratuite
+  var PATTERNS = ['liy', 'kwen', 'katplen']; // manche 1, 2, 3
+  var WINS_NEEDED = 2;
+  var PENALTY_DRAWS = 1;                     // tirages sans marquage après un faux BINGO
+
+  var nodeCrypto = null;
+  try { if (typeof require === 'function') nodeCrypto = require('crypto'); } catch (e) { /* navigateur */ }
+
+  // Entier aléatoire dans [0, max). rng optionnel (fonction -> [0,1)) pour les tests.
+  function randInt(max, rng) {
+    if (typeof rng === 'function') return Math.floor(rng() * max);
+    if (nodeCrypto && nodeCrypto.randomInt) return nodeCrypto.randomInt(max);
+    var c = typeof globalThis !== 'undefined' && globalThis.crypto;
+    if (c && c.getRandomValues) {
+      var limit = Math.floor(0x100000000 / max) * max;
+      var buf = new Uint32Array(1);
+      do { c.getRandomValues(buf); } while (buf[0] >= limit);
+      return buf[0] % max;
+    }
+    return Math.floor(Math.random() * max);
+  }
+
+  function letterFor(n) {
+    for (var i = 0; i < 5; i++) if (n >= RANGES[i][0] && n <= RANGES[i][1]) return LETTERS[i];
+    return '';
+  }
+
+  // ---------- Cartes ----------
+  // card[ligne][colonne], 5x5. card[2][2] === FREE.
+  function generateCard(rng) {
+    var card = [[], [], [], [], []];
+    for (var c = 0; c < 5; c++) {
+      var pool = [];
+      for (var n = RANGES[c][0]; n <= RANGES[c][1]; n++) pool.push(n);
+      for (var r = 0; r < 5; r++) {
+        var idx = randInt(pool.length, rng);
+        card[r][c] = pool.splice(idx, 1)[0];
+      }
+    }
+    card[2][2] = FREE;
+    return card;
+  }
+
+  // ---------- Figures ----------
+  // Renvoie une liste de groupes de cases [[r,c],...]. La figure est faite si UN groupe est complet.
+  function patternGroups(pattern) {
+    var g = [], i, j, line;
+    if (pattern === 'liy') {
+      for (i = 0; i < 5; i++) {
+        line = []; for (j = 0; j < 5; j++) line.push([i, j]); g.push(line);
+        line = []; for (j = 0; j < 5; j++) line.push([j, i]); g.push(line);
+      }
+      line = []; for (i = 0; i < 5; i++) line.push([i, i]); g.push(line);
+      line = []; for (i = 0; i < 5; i++) line.push([i, 4 - i]); g.push(line);
+      return g;
+    }
+    if (pattern === 'kwen') return [[[0, 0], [0, 4], [4, 0], [4, 4], [2, 2]]];
+    if (pattern === 'katplen') {
+      line = [];
+      for (i = 0; i < 5; i++) for (j = 0; j < 5; j++) line.push([i, j]);
+      return [line];
+    }
+    return [];
+  }
+
+  function toSet(marks) { var s = {}; for (var i = 0; i < marks.length; i++) s[marks[i]] = true; return s; }
+  function filled(card, set, r, c) { var v = card[r][c]; return v === FREE || set[v] === true; }
+
+  // Nombre minimal de cases encore à marquer pour réussir la figure (0 = figure complète).
+  function remainingToComplete(card, marks, pattern) {
+    var set = toSet(marks), groups = patternGroups(pattern), best = 25;
+    for (var i = 0; i < groups.length; i++) {
+      var missing = 0;
+      for (var k = 0; k < groups[i].length; k++) {
+        if (!filled(card, set, groups[i][k][0], groups[i][k][1])) missing++;
+      }
+      if (missing < best) best = missing;
+    }
+    return best;
+  }
+
+  function isComplete(card, marks, pattern) { return remainingToComplete(card, marks, pattern) === 0; }
+
+  // Cases gagnantes (pour l'animation de victoire).
+  function winningCells(card, marks, pattern) {
+    var set = toSet(marks), groups = patternGroups(pattern), out = [];
+    for (var i = 0; i < groups.length; i++) {
+      var ok = true;
+      for (var k = 0; k < groups[i].length; k++) {
+        if (!filled(card, set, groups[i][k][0], groups[i][k][1])) { ok = false; break; }
+      }
+      if (ok) out = out.concat(groups[i]);
+    }
+    return out;
+  }
+
+  // ---------- Partie ----------
+  // players: [{ id, name }, ...]  (2 joueurs ou plus)
+  function createGame(players, options) {
+    options = options || {};
+    if (!players || players.length < 2) throw new Error('Au moins 2 joueurs');
+    var state = {
+      players: players.map(function (p) { return { id: p.id, name: p.name }; }),
+      autoMark: !!options.autoMark,
+      round: 0,
+      pattern: PATTERNS[0],
+      phase: 'playing',          // 'playing' | 'roundOver' | 'gameOver'
+      turn: players[0].id,
+      remaining: [],
+      drawn: [],
+      lastBall: null,
+      cards: {}, marks: {}, penalty: {}, blocked: {}, completedAt: {},
+      scores: {},
+      roundWinners: [],
+      history: [],               // [{ round, pattern, winners:[ids] }]
+      winners: []                // rempli à la fin de la partie
+    };
+    state.players.forEach(function (p) { state.scores[p.id] = 0; });
+    startRound(state, options.rng);
+    return state;
+  }
+
+  function startRound(state, rng) {
+    state.pattern = PATTERNS[state.round];
+    state.phase = 'playing';
+    state.remaining = [];
+    for (var n = 1; n <= 75; n++) state.remaining.push(n);
+    state.drawn = [];
+    state.lastBall = null;
+    state.roundWinners = [];
+    state.players.forEach(function (p) {
+      state.cards[p.id] = generateCard(rng);
+      state.marks[p.id] = [];
+      state.penalty[p.id] = 0;
+      state.blocked[p.id] = null;
+      state.completedAt[p.id] = null;
+    });
+    state.turn = state.players[state.round % state.players.length].id;
+  }
+
+  function nextRound(state, rng) {
+    if (state.phase !== 'roundOver') return { ok: false, error: 'not_round_over' };
+    state.round++;
+    startRound(state, rng);
+    return { ok: true, round: state.round, pattern: state.pattern };
+  }
+
+  function updateCompletion(state, id) {
+    if (state.completedAt[id] === null && isComplete(state.cards[id], state.marks[id], state.pattern)) {
+      state.completedAt[id] = state.drawn.length;
+    }
+  }
+
+  function markInternal(state, id, n) {
+    state.marks[id].push(n);
+    updateCompletion(state, id);
+  }
+
+  // Le joueur dont c'est le tour tire une boule. Le tour passe ensuite au joueur suivant.
+  function draw(state, playerId, rng) {
+    if (state.phase !== 'playing') return { ok: false, error: 'not_playing' };
+    if (playerId !== state.turn) return { ok: false, error: 'not_your_turn' };
+    if (state.remaining.length === 0) return { ok: false, error: 'no_balls_left' };
+
+    var idx = randInt(state.remaining.length, rng);
+    var ball = state.remaining.splice(idx, 1)[0];
+    state.drawn.push(ball);
+    state.lastBall = ball;
+
+    state.players.forEach(function (p) {
+      var id = p.id;
+      if (state.penalty[id] > 0) {          // pénalité : ce tirage ne peut pas être marqué
+        state.penalty[id]--;
+        state.blocked[id] = ball;
+      } else {
+        state.blocked[id] = null;
+        if (state.autoMark && state.cards[id].some(function (row) { return row.indexOf(ball) !== -1; })) {
+          markInternal(state, id, ball);
+        }
+      }
+    });
+
+    var i = 0;
+    for (; i < state.players.length; i++) if (state.players[i].id === playerId) break;
+    state.turn = state.players[(i + 1) % state.players.length].id;
+
+    return { ok: true, ball: ball, letter: letterFor(ball) };
+  }
+
+  // Marquage manuel : seulement la dernière boule tirée, présente sur la carte du joueur.
+  function mark(state, playerId, number) {
+    if (state.phase !== 'playing') return { ok: false, error: 'not_playing' };
+    if (!state.cards[playerId]) return { ok: false, error: 'unknown_player' };
+    if (number !== state.lastBall) return { ok: false, error: 'not_last_ball' };
+    if (state.blocked[playerId] === number) return { ok: false, error: 'penalty' };
+    if (state.marks[playerId].indexOf(number) !== -1) return { ok: false, error: 'already_marked' };
+    var onCard = state.cards[playerId].some(function (row) { return row.indexOf(number) !== -1; });
+    if (!onCard) return { ok: false, error: 'not_on_card' };
+    markInternal(state, playerId, number);
+    return { ok: true };
+  }
+
+  // Cri de "BINGO!". Valide -> manche gagnée. Faux -> pénalité.
+  // Si plusieurs joueurs ont complété la figure sur le MÊME tirage, ils gagnent tous (égalité).
+  function callBingo(state, playerId) {
+    if (state.phase !== 'playing') return { ok: false, error: 'not_playing' };
+    if (!state.cards[playerId]) return { ok: false, error: 'unknown_player' };
+
+    if (!isComplete(state.cards[playerId], state.marks[playerId], state.pattern)) {
+      state.penalty[playerId] = PENALTY_DRAWS;
+      return { ok: true, valid: false };
+    }
+
+    var minAt = Infinity;
+    state.players.forEach(function (p) {
+      var at = state.completedAt[p.id];
+      if (at !== null && at < minAt) minAt = at;
+    });
+    var winners = state.players
+      .filter(function (p) { return state.completedAt[p.id] === minAt; })
+      .map(function (p) { return p.id; });
+
+    winners.forEach(function (id) { state.scores[id]++; });
+    state.roundWinners = winners;
+    state.history.push({ round: state.round, pattern: state.pattern, winners: winners.slice() });
+    state.phase = 'roundOver';
+
+    var maxScore = 0;
+    state.players.forEach(function (p) { if (state.scores[p.id] > maxScore) maxScore = state.scores[p.id]; });
+    if (maxScore >= WINS_NEEDED || state.round >= PATTERNS.length - 1) {
+      state.phase = 'gameOver';
+      state.winners = state.players
+        .filter(function (p) { return state.scores[p.id] === maxScore; })
+        .map(function (p) { return p.id; });
+    }
+    return {
+      ok: true, valid: true, winners: winners,
+      cells: winningCells(state.cards[playerId], state.marks[playerId], state.pattern)
+    };
+  }
+
+  // Vue publique pour un joueur (le serveur n'envoie jamais le sac de boules ni les cartes adverses).
+  function viewFor(state, playerId) {
+    var others = {};
+    state.players.forEach(function (p) {
+      if (p.id !== playerId) {
+        others[p.id] = {
+          marked: state.marks[p.id].length,
+          remaining: remainingToComplete(state.cards[p.id], state.marks[p.id], state.pattern)
+        };
+      }
+    });
+    return {
+      players: state.players, round: state.round, pattern: state.pattern, phase: state.phase,
+      turn: state.turn, drawn: state.drawn, lastBall: state.lastBall,
+      scores: state.scores, roundWinners: state.roundWinners, history: state.history, winners: state.winners,
+      autoMark: state.autoMark,
+      card: state.cards[playerId], marks: state.marks[playerId],
+      penalty: state.penalty[playerId], blocked: state.blocked[playerId] === state.lastBall && state.lastBall !== null,
+      others: others
+    };
+  }
+
+  return {
+    LETTERS: LETTERS, RANGES: RANGES, FREE: FREE, PATTERNS: PATTERNS, WINS_NEEDED: WINS_NEEDED,
+    letterFor: letterFor, generateCard: generateCard,
+    patternGroups: patternGroups, remainingToComplete: remainingToComplete,
+    isComplete: isComplete, winningCells: winningCells,
+    createGame: createGame, nextRound: nextRound,
+    draw: draw, mark: mark, callBingo: callBingo, viewFor: viewFor
+  };
+});
