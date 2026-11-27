@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="ht">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#00209F">
+<title>BINGO LAKAY</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<main id="app">
+
+  <!-- MENU PRINCIPAL -->
+  <section class="screen" id="screen-menu">
+    <div class="logo">
+      <div class="balls" aria-hidden="true">
+        <span class="ball b1">B</span><span class="ball b2">I</span><span class="ball b3">N</span><span class="ball b4">G</span><span class="ball b5">O</span>
+      </div>
+      <h1 data-i18n="app.title"></h1>
+      <p class="tagline" data-i18n="app.tagline"></p>
+    </div>
+    <nav class="stack">
+      <button class="btn primary" data-go="modes" data-i18n="menu.play"></button>
+      <button class="btn" data-go="rules" data-i18n="menu.rules"></button>
+      <button class="btn" data-go="settings" data-i18n="menu.settings"></button>
+    </nav>
+    <p class="footer" data-i18n="app.footer"></p>
+  </section>
+
+  <!-- CHOIX DU MODE -->
+  <section class="screen" id="screen-modes">
+    <header class="top">
+      <button class="back" data-go="menu" aria-label="Retounen">‹</button>
+      <h2 data-i18n="modes.title"></h2>
+    </header>
+    <div class="stack">
+      <button class="btn mode" id="btn-solo">
+        <span class="mode-name" data-i18n="modes.solo"></span>
+        <span class="mode-desc" data-i18n="modes.solo.desc"></span>
+      </button>
+      <button class="btn mode" disabled>
+        <span class="mode-name" data-i18n="modes.local"></span>
+        <span class="mode-desc" data-i18n="modes.local.desc"></span>
+        <span class="badge" data-i18n="common.soon"></span>
+      </button>
+      <button class="btn mode" disabled>
+        <span class="mode-name" data-i18n="modes.online"></span>
+        <span class="mode-desc" data-i18n="modes.online.desc"></span>
+        <span class="badge" data-i18n="common.soon"></span>
+      </button>
+    </div>
+    <p class="note" data-i18n="modes.note"></p>
+  </section>
+
+  <!-- REGLEMAN -->
+  <section class="screen" id="screen-rules">
+    <header class="top">
+      <button class="back" data-go="menu" aria-label="Retounen">‹</button>
+      <h2 data-i18n="rules.title"></h2>
+    </header>
+    <div class="card-block"><h3 data-i18n="rules.s1.h"></h3><p data-i18n="rules.s1.p"></p></div>
+    <div class="card-block"><h3 data-i18n="rules.s2.h"></h3><p data-i18n="rules.s2.p"></p></div>
+    <div class="card-block"><h3 data-i18n="rules.s3.h"></h3><p data-i18n="rules.s3.p"></p></div>
+    <div class="card-block"><h3 data-i18n="rules.s4.h"></h3><p data-i18n="rules.s4.p"></p></div>
+    <div class="card-block"><h3 data-i18n="rules.s5.h"></h3><p data-i18n="rules.s5.p"></p></div>
+    <div class="card-block">
+      <h3 data-i18n="rules.example"></h3>
+      <div id="sample-card" class="bingo-card"></div>
+      <button class="btn small" id="btn-newcard" data-i18n="rules.newcard"></button>
+    </div>
+  </section>
+
+  <!-- PARAMET -->
+  <section class="screen" id="screen-settings">
+    <header class="top">
+      <button class="back" data-go="menu" aria-label="Retounen">‹</button>
+      <h2 data-i18n="set.title"></h2>
+    </header>
+    <div class="card-block">
+      <label for="set-name" data-i18n="set.name"></label>
+      <input id="set-name" type="text" maxlength="16" autocomplete="off" data-i18n-ph="set.name.ph">
+    </div>
+    <div class="card-block">
+      <label for="set-difficulty" data-i18n="set.difficulty"></label>
+      <select id="set-difficulty">
+        <option value="fasil" data-i18n="set.easy"></option>
+        <option value="mwayen" data-i18n="set.medium"></option>
+        <option value="difisil" data-i18n="set.hard"></option>
+      </select>
+      <p class="hint" data-i18n="set.difficulty.hint"></p>
+    </div>
+    <div class="card-block">
+      <label class="check"><input id="set-auto" type="checkbox"><span data-i18n="set.auto"></span></label>
+      <p class="hint" data-i18n="set.auto.hint"></p>
+    </div>
+    <button class="btn danger" id="btn-reset" data-i18n="set.reset"></button>
+  </section>
+
+  <!-- JWÈT LA -->
+  <section class="screen" id="screen-game">
+    <header class="top">
+      <button class="back" id="btn-quit" aria-label="Kite">‹</button>
+      <div class="grow">
+        <div class="g-round" id="g-round"></div>
+        <div class="g-score" id="g-score"></div>
+      </div>
+    </header>
+    <div class="g-ball-wrap">
+      <div class="big-ball" id="g-ball">–</div>
+      <div class="g-turn" id="g-turn"></div>
+    </div>
+    <div class="history" id="g-history"></div>
+    <p class="hint" id="g-ai"></p>
+    <div class="bingo-card play" id="g-card"></div>
+    <div class="g-actions">
+      <button class="btn primary" id="g-draw" data-i18n="game.draw"></button>
+      <button class="btn gold" id="g-bingo" data-i18n="game.bingo"></button>
+    </div>
+    <div class="overlay" id="g-overlay" hidden>
+      <div class="overlay-box">
+        <div class="o-emoji" id="o-emoji"></div>
+        <h2 id="o-title"></h2>
+        <p id="o-text"></p>
+        <button class="btn primary" id="o-next"></button>
+        <button class="btn" id="o-menu" data-i18n="game.exit"></button>
+      </div>
+    </div>
+  </section>
+
+</main>
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script src="../shared/engine.js"></script>
+<script src="js/i18n.js"></script>
+<script src="js/ai.js"></script>
+<script src="js/game.js"></script>
+<script src="js/main.js"></script>
+</body>
+  </html>
+                                    
